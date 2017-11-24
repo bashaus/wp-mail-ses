@@ -1,19 +1,19 @@
 <?php
 /**
  * WP Mail SES
- * 
+ *
  * Uses Amazon Web Services (AWS) Simple Email Service (SES) to send emails.
  * Based on the original WP SES project by Sylvain Deaure. Main differences:
  * - Does not store credentials in the database
  * - Convention over configuration
  * - Removed any functionality which can be done via AWS Console
  * - Open Source and public version control
- * 
+ *
  * @package     wp-mail-ses
  * @author      Bashkim Isai
  * @copyright   2016 Bashkim Isai
  * @license     MIT
- * 
+ *
  * @wordpress-plugin
  * Plugin Name: WP Mail SES
  * Plugin URI:  https://github.com/bashaus/wp-mail-ses
@@ -280,10 +280,11 @@ class WP_Mail_SES
 
         $m = new SimpleEmailServiceMessage;
 
-        // Convert headers to string
-        if (is_array($headers)) {
-            $headers = implode(PHP_EOL, $headers);
-        }
+		// we want to be sure that Headers are always an Array
+		if( !is_array( $headers ) ) $headers = explode(',', $headers);
+		foreach ($headers as $header) {
+			$m->addCustomHeader($header);
+		}
 
         // Recipients may contain comma separated emails
         $recipients = explode(',', $recipients);
@@ -319,7 +320,11 @@ class WP_Mail_SES
         }
 
         try {
-            $result = $this->ses->sendEmail($m);
+			$send_raw_email = false;
+			// If we have custom Headers we need to send as RawEmail
+			if( !empty($headers) || count( $headers ) > 0 ) $send_raw_email = true;
+
+            $result = $this->ses->sendEmail($m, $send_raw_email);
         } catch (Exception $e) {
             // Silence
         }
