@@ -265,7 +265,7 @@ class WP_Mail_SES
         return array();
     }
 
-    public function send_email($recipients, $subject, $message, $headers = '', $attachments = '')
+	public function send_email($recipients, $subject, $message, $headers = '', $attachments = '')
     {
         /*
         list($recipients, $subject, $message, $headers, $attachments) = apply_filters(
@@ -280,8 +280,83 @@ class WP_Mail_SES
 
         $m = new SimpleEmailServiceMessage;
 
-		// we want to be sure that Headers are always an Array
-		if( !is_array( $headers ) ) $headers = explode(',', $headers);
+		// Headers
+		$cc = $bcc = $reply_to = array();
+
+		if ( empty( $headers ) ) {
+			$headers = array();
+		} else {
+			if ( !is_array( $headers ) ) {
+				// Explode the headers out, so this function can take both
+				// string headers and an array of headers.
+				$tempheaders = explode( "\n", str_replace( "\r\n", "\n", $headers ) );
+			} else {
+				$tempheaders = $headers;
+			}
+			$headers = array();
+
+			// If it's actually got contents
+			if ( !empty( $tempheaders ) ) {
+				// Iterate through the raw headers
+				foreach ( (array) $tempheaders as $header ) {
+					if ( strpos($header, ':') === false ) {
+						if ( false !== stripos( $header, 'boundary=' ) ) {
+							$parts = preg_split('/boundary=/i', trim( $header ) );
+							$boundary = trim( str_replace( array( "'", '"' ), '', $parts[1] ) );
+						}
+						continue;
+					}
+					// Explode them out
+					list( $name, $content ) = explode( ':', trim( $header ), 2 );
+
+					// Cleanup crew
+					$name    = trim( $name    );
+					$content = trim( $content );
+
+					switch ( strtolower( $name ) ) {
+						// Mainly for legacy -- process a From: header if it's there
+						case 'from':
+							$bracket_pos = strpos( $content, '<' );
+							if ( $bracket_pos !== false ) {
+								// Text before the bracketed email is the "From" name.
+								if ( $bracket_pos > 0 ) {
+									$from_name = substr( $content, 0, $bracket_pos - 1 );
+									$from_name = str_replace( '"', '', $from_name );
+									$from_name = trim( $from_name );
+								}
+
+								$from_email = substr( $content, $bracket_pos + 1 );
+								$from_email = str_replace( '>', '', $from_email );
+								$from_email = trim( $from_email );
+
+							// Avoid setting an empty $from_email.
+							} elseif ( '' !== trim( $content ) ) {
+								$from_email = trim( $content );
+							}
+							break;
+
+						case 'content-type':
+							break;
+
+						case 'cc':
+							$cc = array_merge( (array) $cc, explode( ',', $content ) );
+							break;
+						case 'bcc':
+							$bcc = array_merge( (array) $bcc, explode( ',', $content ) );
+							break;
+						case 'reply-to':
+							$reply_to = array_merge( (array) $reply_to, explode( ',', $content ) );
+							break;
+						default:
+							// Add it to our grand headers array
+							$headers[trim( $name )] = trim( $content );
+							break;
+					}
+				}
+			}
+		}
+
+        // Headers
 		foreach ($headers as $header) {
 			$m->addCustomHeader($header);
 		}
@@ -293,16 +368,35 @@ class WP_Mail_SES
             $m->addTo($recipient);
         }
 
+		foreach ($cc as $carbon) {
+		    $m->addCC($carbon);
+		}
+
+		foreach ($bcc as $bcarbon) {
+		    $m->addBCC($bcarbon);
+		}
+
+		foreach ($reply_to as $reply) {
+		    $m->addReplyTo($reply);
+		}
+
         // Message
         $html = $message;
 
         $text = strip_tags($html);
         $text = html_entity_decode($text, ENT_NOQUOTES, 'UTF-8');
 
+		// From email and name
+		// If we don't have a name from the input headers
+		if ( !isset( $from_name ) )
+			$from_name = apply_filters('wp_mail_from_name', WP_MAIL_SES_COMPOSER_NAME);
+
+		$from_email = apply_filters('wp_mail_from', WP_MAIL_SES_COMPOSER_EMAIL);
+
         $m->setFrom(sprintf(
             '%s <%s>',
-            apply_filters('wp_mail_from_name', WP_MAIL_SES_COMPOSER_NAME),
-            apply_filters('wp_mail_from', WP_MAIL_SES_COMPOSER_EMAIL)
+            $from_name,
+            $from_email
         ));
 
         $m->setSubject($subject);
@@ -325,16 +419,23 @@ class WP_Mail_SES
 			if( !empty($headers) || count( $headers ) > 0 ) $send_raw_email = true;
 
             $result = $this->ses->sendEmail($m, $send_raw_email);
+
         } catch (Exception $e) {
             // Silence
         }
 
         $mail_data = array(
             'to'                => $recipients,
+			'cc'				=> $cc,
+			'bcc'				=> $bcc,
+			'reply_to'			=> $reply_to,
             'subject'           => $subject,
             'message'           => $message,
             'headers'           => $headers,
-            'attachments'       => $attachments
+            'attachments'       => $attachments,
+			'from_name'			=> $from_name,
+			'from_address'      => $from_email,
+			'send_raw_email'	=> $send_raw_email,
         );
 
         return apply_filters(
